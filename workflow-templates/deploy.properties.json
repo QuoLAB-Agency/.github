@@ -1,0 +1,6 @@
+{
+  "name": "Deploy to Vercel",
+  "description": "Deploys the project to Vercel production using the VERCEL_TOKEN secret. Bypasses Vercel seat check on Pro plan.",
+  "iconName": "octicon workflow",
+  "categories": ["Deployment", "Vercel"]
+}
