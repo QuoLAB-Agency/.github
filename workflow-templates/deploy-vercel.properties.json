@@ -1,0 +1,6 @@
+{
+  "name": "Deploy Vercel (QuoLAB)",
+  "description": "Pubblica su Vercel da GitHub Actions con il token del progetto: chi fa push non occupa un posto Vercel. Richiede vercel.json con git.deploymentEnabled false, variabili VERCEL_ORG_ID / VERCEL_PROJECT_ID e segreto VERCEL_TOKEN.",
+  "iconName": "octicon rocket",
+  "categories": ["Deployment", "Vercel"]
+}

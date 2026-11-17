@@ -1,0 +1,96 @@
+# Deploy su Vercel da GitHub Actions (al posto dell'integrazione Git di Vercel): chi fa push non ha bisogno
+# di un posto a pagamento nel team Vercel, la pubblicazione risulta fatta dal token del progetto.
+# NON cancellare questo file e NON togliere "git.deploymentEnabled": false da vercel.json.
+#
+#   push sul branch principale del repo (main, o master dove c'e') -> produzione (dominio vero)
+#   push su un altro branch -> anteprima (link nel riepilogo del run e nello stato "Vercel (Actions)" del commit)
+#   variabile repo VERCEL_SOLO_PRODUZIONE = 1 -> niente anteprime: gli altri branch non pubblicano
+#
+# La build gira su Vercel come prima (stesse variabili d'ambiente, anche quelle "Sensitive", che fuori da Vercel
+# non si possono scaricare): qui si carica solo il codice del commit.
+# La cartella .git viene tolta prima dell'invio: cosi' Vercel non lega il deploy all'autore del commit
+# (che altrimenti dovrebbe essere membro del team, cioe' un posto a pagamento).
+#
+# Settings > Secrets and variables > Actions:
+#   segreto   VERCEL_TOKEN       token Vercel limitato a questo progetto
+#   variabile VERCEL_ORG_ID      team Vercel quolab-projects
+#   variabile VERCEL_PROJECT_ID  progetto Vercel
+#   variabile VERCEL_SOLO_PRODUZIONE (facoltativa) 1 = solo il branch principale
+# Documentazione: G:\Il mio Drive\QuoLAB\Coding Agent QuoLAB\Vercel senza posti a pagamento\
+
+name: Deploy Vercel
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+# Un deploy alla volta per branch; se arrivano piu' push mentre uno e' in corso, parte solo l'ultimo.
+concurrency:
+  group: vercel-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  statuses: write
+
+env:
+  VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+  VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+  VERCEL_TELEMETRY_DISABLED: 1
+  RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+jobs:
+  deploy:
+    if: ${{ github.ref_name == github.event.repository.default_branch || vars.VERCEL_SOLO_PRODUZIONE != '1' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Produzione o anteprima
+        id: env
+        run: |
+          if [ "${GITHUB_REF_NAME}" = "${{ github.event.repository.default_branch }}" ]; then
+            echo "target=produzione" >> "$GITHUB_OUTPUT"
+            echo "flag=--prod" >> "$GITHUB_OUTPUT"
+          else
+            echo "target=anteprima" >> "$GITHUB_OUTPUT"
+            echo "flag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Stato "in corso" sul commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state=pending -f context="Vercel (Actions)" \
+            -f description="Deploy in corso (${{ steps.env.outputs.target }})" -f target_url="${RUN_URL}"
+
+      - name: Vercel CLI
+        run: npm install --global vercel@65.17.0
+
+      - name: Pubblica (build su Vercel)
+        id: deploy
+        run: |
+          rm -rf .git
+          url=$(vercel deploy ${{ steps.env.outputs.flag }} --yes --archive=tgz \
+            --meta commit="${GITHUB_SHA}" \
+            --meta branch="${GITHUB_REF_NAME}" \
+            --meta autore="${GITHUB_ACTOR}")
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+          echo "### ${{ steps.env.outputs.target }}: ${url}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Stato finale sul commit
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            state=success; url="${{ steps.deploy.outputs.url }}"; desc="Online (${{ steps.env.outputs.target }})"
+          else
+            state=failure; url="${RUN_URL}"; desc="Deploy non riuscito: apri il log"
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state="${state}" -f context="Vercel (Actions)" -f description="${desc}" -f target_url="${url}"
