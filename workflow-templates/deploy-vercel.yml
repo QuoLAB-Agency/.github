@@ -3,7 +3,8 @@
 # NON cancellare questo file e NON togliere "git.deploymentEnabled": false da vercel.json.
 #
 #   push sul branch principale del repo (main, o master dove c'e') -> produzione (dominio vero)
-#   push su un altro branch -> anteprima (link nel riepilogo del run e nello stato "Vercel (Actions)" del commit)
+#   push su un altro branch -> anteprima (link nello stato "Vercel (Actions)" del commit), con l'indirizzo fisso
+#                              per branch di prima: <progetto>-git-<branch>-quolab-projects.vercel.app
 #   variabile repo VERCEL_SOLO_PRODUZIONE = 1 -> niente anteprime: gli altri branch non pubblicano
 #
 # La build gira su Vercel come prima (stesse variabili d'ambiente, anche quelle "Sensitive", che fuori da Vercel
@@ -82,13 +83,35 @@ jobs:
           echo "url=${url}" >> "$GITHUB_OUTPUT"
           echo "### ${{ steps.env.outputs.target }}: ${url}" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Indirizzo fisso dell'anteprima (come con l'integrazione Git)
+        id: alias
+        if: steps.env.outputs.target == 'anteprima'
+        continue-on-error: true
+        run: |
+          nome="${{ vars.VERCEL_PROJECT_NAME || github.event.repository.name }}"
+          ramo=$(printf '%s' "${GITHUB_REF_NAME}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
+          base="${nome}-git-${ramo}"
+          # etichetta DNS max 63 caratteri compreso "-quolab-projects": se e' lunga, si accorcia e si aggiunge un codice
+          if [ ${#base} -gt 47 ]; then
+            codice=$(printf '%s' "${GITHUB_REF_NAME}" | sha1sum | cut -c1-6)
+            base="${base:0:40}"; base="${base%-}-${codice}"
+          fi
+          indirizzo="${base}-quolab-projects.vercel.app"
+          # API invece di "vercel alias set": col token limitato al progetto la CLI risponde "User not found"
+          host="${{ steps.deploy.outputs.url }}"; host="${host#https://}"
+          curl -sS --fail-with-body -X POST "https://api.vercel.com/v2/deployments/${host}/aliases?teamId=${VERCEL_ORG_ID}" \
+            -H "Authorization: Bearer ${VERCEL_TOKEN}" -H "Content-Type: application/json" \
+            -d "{\"alias\":\"${indirizzo}\"}"
+          echo "url=https://${indirizzo}" >> "$GITHUB_OUTPUT"
+          echo "### indirizzo fisso del branch: https://${indirizzo}" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Stato finale sul commit
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if [ "${{ job.status }}" = "success" ]; then
-            state=success; url="${{ steps.deploy.outputs.url }}"; desc="Online (${{ steps.env.outputs.target }})"
+            state=success; url="${{ steps.alias.outputs.url || steps.deploy.outputs.url }}"; desc="Online (${{ steps.env.outputs.target }})"
           else
             state=failure; url="${RUN_URL}"; desc="Deploy non riuscito: apri il log"
           fi
